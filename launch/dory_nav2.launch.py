@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+import launch
 from launch import LaunchDescription
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
@@ -32,11 +33,11 @@ def generate_launch_description():
     )
 
     # Rosbag flag argument
-    DeclareLaunchArgument(
+    record_bag_arg = DeclareLaunchArgument(
             'record_bag',
-            default_value='true',
+            default_value='false',
             description='Flag to enable or disable rosbag recording'
-        ),
+        )
 
     # command velocity node
     gen_cmd_vel_node = Node(
@@ -67,6 +68,7 @@ def generate_launch_description():
                                       )
 
     return LaunchDescription([
+        record_bag_arg,
         sub_launch,
         gen_cmd_vel_node,
         gen_thrust_node,
