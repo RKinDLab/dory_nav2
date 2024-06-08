@@ -30,21 +30,26 @@ class PubSubNode(Node):
         )
 
         # topics to publish
+        self.effort_pub_rate = 0.02
         self.effort_publisher = self.create_publisher(Float64MultiArray, 'forward_effort_controller/commands', 10)
-        self.effort_timer = self.create_timer(0.02, self.effort_publish_message)
+        self.effort_timer = self.create_timer(self.effort_pub_rate, self.effort_publish_message)
 
+        self.state_thrust_pub_rate = 0.25
         self.state_thrust_publisher = self.create_publisher(Float64MultiArray, '/state_thrust_vector', 10)
-        self.state_thrust_timer = self.create_timer(0.25, self.state_thrust_publish_message)
+        self.state_thrust_timer = self.create_timer(self.state_thrust_pub_rate, self.state_thrust_publish_message)
 
         # define cmd_vel_vector and vel_vector
         self.cmd_vel_vector = None
         self.vel_vector = None
+
+        self.effort_time_steps = 0
 
 
     def effort_publish_message(self):
         effort = self.gen_control_effort()
         self.effort_publisher.publish(effort)
         # self.get_logger().info(f"Published the thrust. Woot! {effort}")
+        self.effort_time_steps += 1
 
     def state_thrust_publish_message(self):
 
@@ -106,35 +111,27 @@ class PubSubNode(Node):
         x = msg.interface_values[8].values[0]
         
         # position.y
-        # self.get_logger().info(f"Received {msg.interface_values[8].interface_names[7]}: {msg.interface_values[8].values[7]}")
         y = msg.interface_values[8].values[9]
         
         # position.z
-        # self.get_logger().info(f"Received {msg.interface_values[8].interface_names[1]}: {msg.interface_values[8].values[1]}")
         z = msg.interface_values[8].values[1]
         
         # velocity.x
-        # self.get_logger().info(f"Received {msg.interface_values[8].interface_names[0]}: {msg.interface_values[8].values[0]}")
         x_dot = msg.interface_values[8].values[3]
         
         # velocity.y
-        # self.get_logger().info(f"Received {msg.interface_values[8].interface_names[2]}: {msg.interface_values[8].values[2]}")
         y_dot = msg.interface_values[8].values[6]
         
         # velocity.z
-        # self.get_logger().info(f"Received {msg.interface_values[8].interface_names[3]}: {msg.interface_values[8].values[3]}")
         z_dot = msg.interface_values[8].values[5]
         
         # rot.r (roll)
-        # self.get_logger().info(f"Received {msg.interface_values[8].interface_names[5]}: {msg.interface_values[8].values[5]}")
         roll = msg.interface_values[8].values[4]
         
         # rot.p (pitch)
-        # self.get_logger().info(f"Received {msg.interface_values[8].interface_names[6]}: {msg.interface_values[8].values[6]}")
         pitch = msg.interface_values[8].values[10]
         
         # rot.y (yaw)
-        # self.get_logger().info(f"Received {msg.interface_values[8].interface_names[8]}: {msg.interface_values[8].values[8]}")
         yaw = msg.interface_values[8].values[2]
         
         # w.r (roll rate)
@@ -146,15 +143,6 @@ class PubSubNode(Node):
         # w.y (yaw rate)
         yaw_dot = msg.interface_values[8].values[11]
 
-        # # translational velocity in space-fixed coordinates
-        # vel = np.array(x_dot, y_dot, z_dot)
-        # self.angles = np.array([roll, pitch, yaw])
-
-        # # translational velocity in body-fixed coordinates
-        # vel = self.rotation_to_body_fixed(self.angles, vel)
-        # x_dot = vel[0]
-        # y_dot = vel[1]
-        # z_dot = vel[2]
         self.vel_vector = np.array([x_dot, y_dot, z_dot, roll_dot, pitch_dot, yaw_dot])
         self.state_vector = np.array([x, y, z, roll, pitch, yaw, x_dot, y_dot, z_dot, roll_dot, pitch_dot, yaw_dot])
 
@@ -201,6 +189,7 @@ class PubSubNode(Node):
 
     def gen_control_force(self):
 
+        # TODO: Use PI control
         # calculate forces
         K = np.array([[30,0,0,0,0,0],
                       [0,30,0,0,0,0],
@@ -217,9 +206,18 @@ class PubSubNode(Node):
             # command or response has not been received yet
             error = np.zeros(6)
 
+        # forces and torques in body-fixed coordinates
         F = K@error
         F = np.zeros(6)
-        F[1] = 50
+        # ramp input for testing responses
+        if self.effort_time_steps*self.effort_pub_rate<=25:
+            F[2] = (100/25)*self.effort_time_steps*self.effort_pub_rate
+        elif self.effort_time_steps*self.effort_pub_rate<=50:
+            F[2] = -(100/25)*(self.effort_time_steps*self.effort_pub_rate-50)
+        elif self.effort_time_steps*self.effort_pub_rate>50:
+            F[2] = 0
+        else:
+            print("Something is wrong with the ramp function.")
 
         return F
 

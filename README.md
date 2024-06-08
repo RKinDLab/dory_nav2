@@ -22,4 +22,4 @@ If you want to record the states and forces being published, run `ros2 launch do
 ros2bag-convert filepath/filename.db3
 
 ## Plot bag
-python3 `src/dory_nav2/dory_nav2/plot_bag_response.py`
+python3 src/dory_nav2/dory_nav2/plot_bag_response.py
