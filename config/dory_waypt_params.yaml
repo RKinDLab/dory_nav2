@@ -1,0 +1,6 @@
+testing/test_reconfigure:
+  ros__parameters:
+    gains:
+      p: 1.0
+      i: 0.0
+      d: 0.0

@@ -1,4 +1,6 @@
 from setuptools import find_packages, setup
+import os
+from glob import glob
 
 package_name = 'dory_nav2'
 
@@ -10,7 +12,8 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name + '/launch', ['launch/dory_nav2.launch.py']),
+        (os.path.join('share', package_name), glob('launch/*.launch.py')),
+        (os.path.join('share', package_name), glob('config/*.yaml'))
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -23,6 +26,7 @@ setup(
         'console_scripts': [
         'clock_node = dory_nav2.clock_node:main',
         'gen_cmd_vel = dory_nav2.generate_command_vel:main',
+        'odom_publisher = dory_nav2.odom_publisher:main',
         'gen_force = dory_nav2.generate_principle_forces:main'
         ],
     },

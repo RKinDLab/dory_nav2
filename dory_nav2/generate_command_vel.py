@@ -27,13 +27,13 @@ class CmdVelPublisher(Node):
 
         if self.time <= 10000:
 
-            cmd_vel_msg.linear.x = 5.0
+            cmd_vel_msg.linear.x = 1.0
             cmd_vel_msg.linear.y = 0.0
             cmd_vel_msg.linear.z = 0.0
 
             cmd_vel_msg.angular.x = 0.0
             cmd_vel_msg.angular.y = 0.0
-            cmd_vel_msg.angular.z = 0.0
+            cmd_vel_msg.angular.z = 0.5
 
         elif self.time > 10000 and self.time <=20000:
 

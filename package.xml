@@ -10,9 +10,11 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>rosgraph_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>control_msgs</exec_depend>
   <exec_depend>numpy</exec_depend>
+  <exec_depend>tf2</exec_depend>
 
 
   <test_depend>ament_copyright</test_depend>
