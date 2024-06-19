@@ -16,21 +16,29 @@ from scipy import linalg
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 
-# TODO: Bag cmd_vel
+# To allow selective data handling. All objects have access to this object
+# and its contents, but not the other way around. This is the Object master. 
+class MainObjectHandle():
+    def __init__ (self):
+        # For handling multithreads. 
+        self.reentrant_group_1 = ReentrantCallbackGroup()
+        # For handling body fixed input controls.
+        self.input_ctrls = np.zeros(6)
+        # For storing the state vector 
+        self.state_vector = np.zeros(12)
+
+
 
 class PubSubNode(Node):
-    def __init__(self,waypoints_enabled=False,debug=False):
+    def __init__(self,object,waypoints_enabled=False,debug=False):
         super().__init__('pub_sub_node')
-
-        # For multi-threading
-        self.reentrant_group_1 = ReentrantCallbackGroup()
+        # For master object access. 
+        self.object = object
 
         # For waypoint functionality.
         self.waypoints_enabled=waypoints_enabled
         # For debug functionality
         self.debug=debug
-        # For External Control functionality 
-        self.input_ctrls=[0.0,0.0,0.0,0.0,0.0,0.0]
 
         # DON't NEED THIS////////////////////////////////////////////////////////////////
         if not waypoints_enabled:
@@ -40,7 +48,7 @@ class PubSubNode(Node):
                 '/cmd_vel',
                 self.cmd_vel_callback,
                 10,
-                callback_group=self.reentrant_group_1
+                callback_group=object.reentrant_group_1
             )
 
         self.sub_vel = self.create_subscription(
@@ -48,19 +56,19 @@ class PubSubNode(Node):
             '/dynamic_joint_states',
             self.vel_callback,
             10,
-            callback_group=self.reentrant_group_1
+            callback_group=object.reentrant_group_1
         )
 
         ## Timers
         # Effort
         self.effort_pub_rate = 0.002
-        self.effort_timer = self.create_timer(self.effort_pub_rate, self.effort_publish_message, callback_group=self.reentrant_group_1)
+        self.effort_timer = self.create_timer(self.effort_pub_rate, self.effort_publish_message, callback_group=object.reentrant_group_1)
 
         # Only publish if debugging enabled. FIX LATER////////////////////////////////////////////////////////
         if self.debug:
             # Thrust
             self.state_thrust_pub_rate = 0.25
-            self.state_thrust_timer = self.create_timer(self.state_thrust_pub_rate, self.state_thrust_publish_message, callback_group=self.reentrant_group_1)
+            self.state_thrust_timer = self.create_timer(self.state_thrust_pub_rate, self.state_thrust_publish_message, callback_group=object.reentrant_group_1)
 
 
         ## Publishers
@@ -78,9 +86,6 @@ class PubSubNode(Node):
         self.vel_vector = None
 
         self.effort_time_steps = 0
-
-        # state vector
-        self.state_vector = np.zeros(12)
 
 ######
 # Timer Publishers
@@ -100,18 +105,18 @@ class PubSubNode(Node):
         thrust = self.gen_control_force()
 
         # combine states and thrusts for publishing
-        data = [self.state_vector[0],
-                self.state_vector[1],
-                self.state_vector[2],
-                self.state_vector[3],
-                self.state_vector[4],
-                self.state_vector[5],
-                self.state_vector[6],
-                self.state_vector[7],
-                self.state_vector[8],
-                self.state_vector[9],
-                self.state_vector[10],
-                self.state_vector[11],
+        data = [self.object.state_vector[0],
+                self.object.state_vector[1],
+                self.object.state_vector[2],
+                self.object.state_vector[3],
+                self.object.state_vector[4],
+                self.object.state_vector[5],
+                self.object.state_vector[6],
+                self.object.state_vector[7],
+                self.object.state_vector[8],
+                self.object.state_vector[9],
+                self.object.state_vector[10],
+                self.object.state_vector[11],
                 thrust[0],
                 thrust[1],
                 thrust[2],
@@ -183,7 +188,7 @@ class PubSubNode(Node):
         yaw_dot = msg.interface_values[8].values[11]
 
         self.vel_vector = np.array([x_dot, y_dot, z_dot, roll_dot, pitch_dot, yaw_dot])
-        self.state_vector = np.array([x, y, z, roll, pitch, yaw, x_dot, y_dot, z_dot, roll_dot, pitch_dot, yaw_dot])
+        self.object.state_vector = np.array([x, y, z, roll, pitch, yaw, x_dot, y_dot, z_dot, roll_dot, pitch_dot, yaw_dot])
 #####
 # Subscribers
 #####
@@ -245,18 +250,6 @@ class PubSubNode(Node):
                       [0.0,     0.0,     0.0,    0.0,   -0.218, -0.218, 0.218, 0.218],
                       [0.0,     0.0,     0.0,    0.0,   -0.12,   0.12, -0.12,  0.12],
                       [0.1888, -0.1888, -0.1888, 0.1888, 0.0,    0.0,   0.0,   0.0]])
-        # TYPE 2
-
-
-        # pseudo inverse of A
-        # A_pinv = np.array([[-3.53606789e-01,  3.53606789e-01,  2.94020928e-16, -9.54893657e-17,  1.15648232e-16,  1.32415254e+00],
-        #                    [-3.53606789e-01, -3.53606789e-01, -2.94020928e-16, -9.54893657e-17,  1.15648232e-16, -1.32415254e+00],
-        #                    [ 3.53606789e-01,  3.53606789e-01, -2.94020928e-16, -9.54893657e-17,  1.15648232e-16, -1.32415254e+00],
-        #                    [ 3.53606789e-01, -3.53606789e-01,  2.94020928e-16, -9.54893657e-17,  1.15648232e-16,  1.32415254e+00],
-        #                    [ 6.26367697e-34, -1.50165300e-17,  2.50000000e-01, -1.14678899e+00, -2.08333333e+00, -3.75413250e-18],
-        #                    [-6.26367697e-34,  1.50165300e-17, -2.50000000e-01, -1.14678899e+00,  2.08333333e+00,  3.75413250e-18],
-        #                    [-6.26367697e-34,  1.50165300e-17, -2.50000000e-01,  1.14678899e+00, -2.08333333e+00,  3.75413250e-18],
-        #                    [ 6.26367697e-34, -1.50165300e-17,  2.50000000e-01,  1.14678899e+00,  2.08333333e+00, -3.75413250e-18]])
 
         A_pinv = np.linalg.pinv(A)
 
@@ -268,55 +261,14 @@ class PubSubNode(Node):
         Torque = A_pinv@F
         #print(Torque)
 
-
-        # pad with extra zeros 
+        # Pad with extra zeros. The first FIVE are for the arm. The last EIGHT are for the thrusters. 
+        # The way the controllers are setup, need to give thruster commands. Sim converts these back to body based.
         data = [0.0, 0.0, 0.0, 0.0, 0.0, Torque[0], Torque[1], Torque[2], Torque[3], Torque[4], Torque[5], Torque[6], Torque[7]]
 
-        # Equal Thrust
-        thrust = 0.5
-        #data = [thruster1, thruster6, 0.0, 0.0, thruster4, thruster2, 0.0, 0.0, IMU, thruster3, thruster8, thruster7, 0.0, thruster5]
-        # Thruster 1-4 on the bottom. Thrusters 5-8 on top. 
-        #data = np.zeros(13)
-        # # NOTHING
-        # data[0]=thrust
-        # # NOTHING
-        # data[1]=thrust
-        # # NOTHING
-        # data[2]=thrust
-        # # NOTHING
-        # data[3]=thrust
-        # # NOTHING
-        # data[4]=thrust
-        # # PURE ROLL///////////////////////////////////////////////////////
-        #data[5]=thrust
-        # # DONT KNOW. Roll and Pitch///////////////////////////////////////
-        # data[6]=10.0
-        # # NOTHING
-        # data[7]=thrust
-        # # Opposite of 6 ????/////////////////////////////////////////////
-        # data[8]=-10.0
-        # # Pitch?///////////////////////////////////////////////////
-        # data[9]=thrust
-        # # NOTHING?????????????????????/////////////////////////////
-        # data[10]=thrust
-        # # BACK RIGHT DOWN////////////////////////////////////////
-        # data[11]=10.0
-        # NOTHING???????????????????/////////////////////////////
-        # data[12]=thrust
-
-
-        # data = [Torque[0], Torque[1], Torque[2], Torque[3], Torque[4], Torque[5], Torque[6], Torque[7], 0.0, 0.0, 0.0, 0.0, 0.0]
-        # data = [Torque[0], Torque[5], 0.0, 0.0, Torque[3], Torque[1], 0.0, 0.0, Torque[2], Torque[7], Torque[6], 0.0, Torque[4]]
-
         # Msg saving. 
-        # data = np.zeros(13)
         dim = []
         layout = MultiArrayLayout(dim=dim, data_offset=0)
         effort_msg = Float64MultiArray(layout=layout, data=data)
-
-
-        # self.get_logger().warning("\nSTUFF: {0}\n".format(1))
-
         return effort_msg
 
     def gen_control_force(self,Fx=0.0,Fy=0.0,Fz=0.0,Tx=0.0,Ty=0.0,Tz=0.0):
@@ -334,8 +286,7 @@ class PubSubNode(Node):
             # cmd_vel_vector published via generate command_vel
             # vel_vector taken from IMU
 
-        #NOTE THE DEBUG FLAG MESSES WITH THIS //////////////////////////////////////////////////
-
+        #NOTE THE DEBUG FLAG MESSES WITH THIS. DISABLES the cmd_vel_vector. //////////////////////////////////////////////////
         # If get vals from both:
         if self.cmd_vel_vector is not None and self.vel_vector is not None:
             # velocity command and velocity response received
@@ -345,14 +296,12 @@ class PubSubNode(Node):
             # command or response has not been received yet
             error = np.zeros(6)
 
-        # forces and torques in body-fixed coordinates
-
+        # Forces and Torques in body-fixed coordinates
         # Matrix multiplication
         F = K@error
 
         # ????? And then 0's ???????
         F = np.zeros(6)
-
         # ????? And then 0's ???????
 
         # ramp input for testing responses//////////////////////////////////////////////////////////////////////////////////
@@ -368,7 +317,7 @@ class PubSubNode(Node):
                 print("Something is wrong with the ramp function.")
         else:
             # INPUT FORCE CONTROLs. DO PID somewhere else. 
-            F = self.input_ctrls
+            F = self.object.input_ctrls
 
         return F
 
@@ -387,17 +336,14 @@ from geometry_msgs.msg import Quaternion
 #####
 class DoryWaypointFollower(Node):
     def __init__(self, object):
-        # Here you have the class constructor
-        # call super() in the constructor to initialize the Node object
-        # the parameter you pass is the node name
         super().__init__('dory_waypoint_follower')
+        # For master object access. 
+        self.object = object
 
         # Timer determines the publish rate of the waypoint controls.
         self.timer_period = 0.02
         self.timer = self.create_timer(self.timer_period, self.timer_callback,callback_group=object.reentrant_group_1)
 
-        # To store PubSubNode to access contents 
-        self.object = object
         # To store Force and Torque Vectors
         self._ctrl_inputs = [0.0,0.0,0.0,0.0,0.0,0.0]
 
@@ -407,55 +353,10 @@ class DoryWaypointFollower(Node):
         # Timer for Buoyancy CTRL FOR NOW
         #self.timer = self.create_timer(self.timer_period, self.anti_buoyancy_ctrl,callback_group=object.reentrant_group_1)
 
-
-        ### DYNAMIC RECONFIG https://hippocampusrobotics.github.io/fav_docs/tutorials/dynamic_reconfigure.html
-        # self.declare_parameters(
-        #     namespace='',
-        #     parameters=[
-        #         ('gains.p', rclpy.Parameter.Type.DOUBLE),
-        #         ('gains.i', rclpy.Parameter.Type.DOUBLE),
-        #         ('gains.d', rclpy.Parameter.Type.DOUBLE),
-        #     ],
-        # )
-        # the calls to get_parameter will raise an exception if the paramter
-        # value is not provided when the node is started.
-        # param = self.get_parameter('gains.p')
-        # self.get_logger().info(f'{param.name}={param.value}')
-        # self.p_gain = param.value
-
-        # param = self.get_parameter('gains.i')
-        # self.get_logger().info(f'{param.name}={param.value}')
-        # self.i_gain = param.value
-
-        # param = self.get_parameter('gains.d')
-        # self.get_logger().info(f'{param.name}={param.value}')
-        # self.d_gain = param.value
-
-        # self.add_on_set_parameters_callback(self.on_params_changed)
-
-        ### DYNAMIC RECONFIG
-
         # To store current robot navigation data
         self.robot_data = {"CurrentXYZ":[0.0,0.0,0.0],"WaypointXYZ":[[0.0,1.0,0.0]],"Time":0.0}
         # To store robot updates
         self.robot_err = {"orient_err":{"xy":0.0,"xz":0.0},"xyz_err":[0.0,0.0,0.0],"dist_err":0.0}
-
-# DYNAMIC RECONFIG CALLBACK
-    # def on_params_changed(self, params):
-    #     param: rclpy.Parameter
-
-    #     for param in params:
-    #         self.get_logger().info(f'Try to set [{param.name}] = {param.value}')
-    #         if param.name == 'gains.p':
-    #             self.p_gain = param.value
-    #         elif param.name == 'gains.i':
-    #             self.i_gain = param.value
-    #         elif param.name == 'gains.d':
-    #             self.d_gain = param.value
-    #         else:
-    #             continue
-
-    #     return SetParametersResult(succesful=True, reason='Parameter set')
 
         # PID CTRL
         self.kp = np.zeros(6)
@@ -773,7 +674,7 @@ class DynamicReconfig(Node):
     def __init__(self, object):
 
         super().__init__(node_name='dynamic_reconfigure')
-        # To give access to all other objects in script. 
+        # To give selective access to all other objects info in script. 
         self.object = object
         self.init_params()
 
@@ -783,7 +684,7 @@ class DynamicReconfig(Node):
         self.declare_parameters(
             namespace='',
             parameters=[
-                ('gains.p', rclpy.Parameter.Type.DOUBLE),
+                ('gains.p', rclpy.Parameter.Type.STRING),
                 ('gains.i', rclpy.Parameter.Type.DOUBLE),
                 ('gains.d', rclpy.Parameter.Type.DOUBLE),
             ],
@@ -815,6 +716,7 @@ class DynamicReconfig(Node):
             self.get_logger().info(f'Try to set [{param.name}] = {param.value}')
             if param.name == 'gains.p':
                 self.p_gain = param.value
+                self.string_list_handle(input_str=self.p_gain)
 
             elif param.name == 'gains.i':
                 self.i_gain = param.value
@@ -828,20 +730,42 @@ class DynamicReconfig(Node):
             self.get_logger().info(f'{param.name} = {param.value} SET')
 
         return SetParametersResult(successful=True, reason='Parameter set')
+
+# For the dynamic reconfigure interface to work, strings must be used. Lists don't work. 
+# So need to convert the inputted strings to lists. 
+    def string_list_handle(self, input_str):
+        # Remove the front and back brackets. 
+        output_list = input_str[1:-1]
+        # self.get_logger().info(f'{output_list}')
+        # Slice by commas.
+        output_list = output_list.split(",")
+        # self.get_logger().info(f'{output_list}')
+        # Convert to list
+        output_list = list(output_list)
+        # Change the type of the contents 
+        output_list = list(map(float,output_list))
+        # self.get_logger().info(f'{output_list}')
+        return output_list
+
+
 ##########################################################################
 # Helper Functions
 ##########################################################################
 
 def main(args=None):
     rclpy.init(args=args)
+    # The master object responsible for handling data sharing. 
+    dory_master = MainObjectHandle()
     # Waypoint enabled vs testing controls
-    dory_pub_sub = PubSubNode(waypoints_enabled=True)
+    dory_pub_sub = PubSubNode(waypoints_enabled=True,object=dory_master)
     # Must be made after dory_pub_sub
-    dory_waypoints = DoryWaypointFollower(object=dory_pub_sub)
+    dory_waypoints = DoryWaypointFollower(object=dory_master)
     # For TESTING reconfigure
-    dory_reconfig = DynamicReconfig()
+    dory_reconfig = DynamicReconfig(object=dory_master)
 
     # Multi-threading functionality.
+    # num_threads based on available threads on machine and how many things 
+    # need to run at once. 
     executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(dory_pub_sub)
     executor.add_node(dory_waypoints)

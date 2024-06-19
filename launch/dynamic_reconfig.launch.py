@@ -14,7 +14,7 @@ def generate_launch_description() -> LaunchDescription:
     launch_description = LaunchDescription()
 
     # Namespace argument
-    arg = DeclareLaunchArgument('testing')
+    arg = DeclareLaunchArgument('ns')
     launch_description.add_action(arg)
 
     # Get path to config and add. 
@@ -34,7 +34,7 @@ def generate_launch_description() -> LaunchDescription:
 
     # For grouping things into namespaces (ROS2) version.
     group = GroupAction([
-        PushRosNamespace(LaunchConfiguration('testing')),
+        PushRosNamespace(LaunchConfiguration('ns')),
         node,
     ])
     launch_description.add_action(group)

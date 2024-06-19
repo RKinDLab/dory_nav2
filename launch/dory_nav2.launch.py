@@ -74,7 +74,7 @@ def generate_launch_description():
     #                         )
     gen_cmd_vel_node = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(sub_launch_path),
-        launch_arguments={'testing':'testing',
+        launch_arguments={'ns':'dory',
                     }.items()
         )
 
