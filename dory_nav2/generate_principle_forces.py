@@ -22,11 +22,14 @@ class MainObjectHandle():
     def __init__ (self):
         # For handling multithreads. 
         self.reentrant_group_1 = ReentrantCallbackGroup()
-        # For handling body fixed input controls.
+        # For handling body fixed body based (F: xyz,rpy) input controls.
         self.input_ctrls = np.zeros(6)
         # For storing the state vector 
         self.state_vector = np.zeros(12)
-
+        # PID parameters for waypoint following.Based on Dynamic Reconfigure
+        self.P = np.zeros(6)
+        self.I = np.zeros(6)
+        self.D = np.zeros(6)
 
 
 class PubSubNode(Node):
@@ -685,8 +688,8 @@ class DynamicReconfig(Node):
             namespace='',
             parameters=[
                 ('gains.p', rclpy.Parameter.Type.STRING),
-                ('gains.i', rclpy.Parameter.Type.DOUBLE),
-                ('gains.d', rclpy.Parameter.Type.DOUBLE),
+                ('gains.i', rclpy.Parameter.Type.STRING),
+                ('gains.d', rclpy.Parameter.Type.STRING),
             ],
         )
 
@@ -712,20 +715,22 @@ class DynamicReconfig(Node):
         param: rclpy.Parameter
         # Checking all parameter changes. 
         for param in params:
-
             self.get_logger().info(f'Try to set [{param.name}] = {param.value}')
             if param.name == 'gains.p':
                 self.p_gain = param.value
-                self.string_list_handle(input_str=self.p_gain)
-
+                response = self.string_list_handle(input_str=self.p_gain)
+                self.pid_change_handle(input_data=response,input_type="P")
             elif param.name == 'gains.i':
                 self.i_gain = param.value
-
+                response = self.string_list_handle(input_str=self.p_gain)
+                self.pid_change_handle(input_data=response,input_type="P")
             elif param.name == 'gains.d':
                 self.d_gain = param.value
+                response = self.string_list_handle(input_str=self.p_gain)
+                self.pid_change_handle(input_data=response,input_type="P")
             else:
                 # To prevent program freezing. 
-                return SetParametersResult(successful=False, reason='Parameter not found')
+                return SetParametersResult(successful=False, reason='Parameter not found.')
 
             self.get_logger().info(f'{param.name} = {param.value} SET')
 
@@ -736,17 +741,37 @@ class DynamicReconfig(Node):
     def string_list_handle(self, input_str):
         # Remove the front and back brackets. 
         output_list = input_str[1:-1]
-        # self.get_logger().info(f'{output_list}')
+        self.get_logger().debug(f'{output_list}')
         # Slice by commas.
         output_list = output_list.split(",")
-        # self.get_logger().info(f'{output_list}')
+        self.get_logger().debug(f'{output_list}')
         # Convert to list
         output_list = list(output_list)
-        # Change the type of the contents 
-        output_list = list(map(float,output_list))
-        # self.get_logger().info(f'{output_list}')
+        # Handle input errors.
+        try:
+            # Change the type of the contents 
+            output_list = list(map(float,output_list))
+            if len(output_list)>6:
+                self.get_logger().warning(f'{output_list}. Too many inputs. Check input.')
+                output_list = None
+        except:
+            self.get_logger().warning(f'{output_list}. Could not cast to list of floats. Check input.')
+            output_list = None
+            
+        self.get_logger().debug(f'{output_list}')
         return output_list
-
+        
+# To publish changes to master data handler if PID inputs are correct.
+    def pid_change_handle(self,input_data,input_type):
+        if input_data == None:
+            self.get_logger().warning(f'PID controls NOT updated.')
+        else:
+            if input_type == "P":
+                self.object.P=input_data
+            elif input_type == "I":
+                self.object.I=input_data
+            elif input_type == "D":
+                self.object.D=input_data                
 
 ##########################################################################
 # Helper Functions
