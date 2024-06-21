@@ -65,26 +65,11 @@ def generate_launch_description():
     sub_launch_path = f'{sub_package_share_directory}/dynamic_reconfig.launch.py'
 
     # command velocity node
-    # gen_cmd_vel_node = Node(
-    #                         package='dory_nav2',
-    #                         executable='gen_cmd_vel',
-    #                         name='command_vel_publisher',
-    #                         output='screen',
-    #                         parameters = [{'use_sim_time':False}]
-    #                         )
     gen_cmd_vel_node = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(sub_launch_path),
         launch_arguments={'ns':'dory',
                     }.items()
         )
-
-    # thrust node
-    gen_thrust_node = Node(
-                           package='dory_nav2',
-                           executable='gen_force',
-                           name='thrust_publisher',
-                           output='screen',
-                           )
 
     #####################
     ## ODOM TF HANDLE
@@ -93,7 +78,6 @@ def generate_launch_description():
     odom_pub = Node(
                            package='dory_nav2',
                            executable='odom_publisher',
-                           #name='odom_publisher',
                            output='screen',
                            )   
 

@@ -3,7 +3,7 @@ import rclpy
 from rclpy.node import Node
 
 # MSGs
-from std_msgs.msg import String, Float32MultiArray, MultiArrayLayout, Float64MultiArray
+from std_msgs.msg import MultiArrayLayout, Float64MultiArray, Header
 from geometry_msgs.msg import Twist
 from control_msgs.msg import DynamicJointState
 
@@ -16,237 +16,146 @@ from scipy import linalg
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 
+# Custom msg interface for data visualization 
+from dory_visuals_msgs.msg import State
+
 # To allow selective data handling. All objects have access to this object
 # and its contents, but not the other way around. This is the Object master. 
-class MainObjectHandle():
-    def __init__ (self):
+class MainObjectHandle(Node):
+    def __init__ (self,pub_state=False):
+        super().__init__('dory_main_handle')
+
         # For handling multithreads. 
         self.reentrant_group_1 = ReentrantCallbackGroup()
         # For handling body fixed body based (F: xyz,rpy) input controls.
         self.input_ctrls = np.zeros(6)
-        # For storing the state vector 
-        self.state_vector = np.zeros(12)
-        # PID parameters for waypoint following.Based on Dynamic Reconfigure
-        self.P = np.zeros(6)
-        self.I = np.zeros(6)
-        self.D = np.zeros(6)
 
+        # PID parameters for waypoint following. Based on Dynamic Reconfigure Config. 
+        #Can be reconfigured realtime.
+        self.kp = np.zeros(6)
+        self.kd = np.zeros(6)
+        # Current state: [x y z wq xq yq zq u v w p q r]
+        self.state_current = [0.0]*13
+        # Current state simple: [xyz rpy]
+        # To prevent waypoint list follower from skipping first index. 
+        self.state_current_simple = [100.0]*6
 
-class PubSubNode(Node):
-    def __init__(self,object,waypoints_enabled=False,debug=False):
-        super().__init__('pub_sub_node')
+        ## TO DO: CHANGE THE SIM BASED ON IF INPUT WAYPTS OR SAVED PATH FROM CONFIG OR 
+        # Path generation function.
+        # Waypoints
+        self.waypoint = np.zeros(6)
+
+        # for Plotjuggler plotting. Human readable data. 
+        self.pub_state = pub_state
+        if self.pub_state:
+            ## Pubs for Roll, Pitch, Yaw.
+            self._pub_state_rate = 0.002
+            self._state_timer = self.create_timer(self._pub_state_rate, self.publish_state_message, callback_group=self.reentrant_group_1)
+
+            ## Publishers
+            self.state_visuals = State()
+            self.state_header = Header() # To be copied from the IMU, because publishing based on that data. 
+            self._publish_state = self.create_publisher(State, '/dory/visuals/state', 10)
+
+    def publish_state_message(self):
+        # Header same as IMU
+        self.state_visuals.header = self.state_header
+        # Position Data
+        self.state_visuals.pose.position.x = self.state_current[0]
+        self.state_visuals.pose.position.y = self.state_current[1]
+        self.state_visuals.pose.position.z = self.state_current[2]
+        # Euler Orientation
+        self.state_visuals.pose.orientation.euler.roll = self.state_current_simple[3]
+        self.state_visuals.pose.orientation.euler.pitch = self.state_current_simple[4]
+        self.state_visuals.pose.orientation.euler.yaw = self.state_current_simple[5]
+        # Quaternion Orientation
+        self.state_visuals.pose.orientation.quaternion.w = self.state_current[3]
+        self.state_visuals.pose.orientation.quaternion.x = self.state_current[4]
+        self.state_visuals.pose.orientation.quaternion.x = self.state_current[5]
+        self.state_visuals.pose.orientation.quaternion.x = self.state_current[6]
+        # Velocity Linear
+        self.state_visuals.twist.linear.x = self.state_current[7]
+        self.state_visuals.twist.linear.y = self.state_current[8]
+        self.state_visuals.twist.linear.z = self.state_current[9]
+        # Velocity Angular
+        self.state_visuals.twist.angular.x = self.state_current[10]   
+        self.state_visuals.twist.angular.y = self.state_current[11]       
+        self.state_visuals.twist.angular.z = self.state_current[12]       
+
+        self._publish_state.publish(self.state_visuals)
+        return
+
+# To handle pose and velocity data
+class ImuHandle(Node):
+    def __init__(self,object_master):
+        super().__init__('dory_imu_handle')
         # For master object access. 
-        self.object = object
-
-        # For waypoint functionality.
-        self.waypoints_enabled=waypoints_enabled
-        # For debug functionality
-        self.debug=debug
-
-        # DON't NEED THIS////////////////////////////////////////////////////////////////
-        if not waypoints_enabled:
-            # Subscribers
-            self.sub_cmd_vel = self.create_subscription(
-                Twist,
-                '/cmd_vel',
-                self.cmd_vel_callback,
-                10,
-                callback_group=object.reentrant_group_1
-            )
+        self.object_master = object_master
 
         self.sub_vel = self.create_subscription(
             DynamicJointState,
             '/dynamic_joint_states',
-            self.vel_callback,
+            self.dynamic_joint_states_callback,
             10,
-            callback_group=object.reentrant_group_1
+            callback_group=object_master.reentrant_group_1
         )
 
-        ## Timers
-        # Effort
+    # Subscribers
+    def dynamic_joint_states_callback(self, msg):
+        # Pull the header if visual publications on. 
+        if self.object_master.pub_state:
+            self.object_master.state_header = msg.header
+
+        # Positions XYZ
+        x = msg.interface_values[8].values[9]
+        y = msg.interface_values[8].values[2]
+        z = msg.interface_values[8].values[0]
+        # Orientation
+        ox = msg.interface_values[8].values[10]
+        oy = msg.interface_values[8].values[6]
+        oz = msg.interface_values[8].values[3]
+        ow = msg.interface_values[8].values[1]
+        # Velocities XYZ
+        x_dot = msg.interface_values[8].values[4]
+        y_dot = msg.interface_values[8].values[5]
+        z_dot = msg.interface_values[8].values[7]
+        # RPY Rates
+        roll_dot = msg.interface_values[8].values[8]
+        pitch_dot = msg.interface_values[8].values[11]
+        yaw_dot = msg.interface_values[8].values[12]
+        
+        # PD Input is current state. 
+        self.object_master.state_current=[x,y,z,ow,ox,oy,oz,x_dot,y_dot,z_dot,roll_dot,pitch_dot,yaw_dot]
+        # For simplified current state.
+        roll,pitch,yaw = euler_from_quaternion(ox,oy,oz,ow)
+        self.object_master.state_current_simple=[x,y,z,roll,pitch,yaw]
+
+# Effort publish to thrusters and body force-> thruster mapping.
+class EffortHandle(Node):
+    def __init__(self,object_master):
+        super().__init__('dory_effort_handle')
+        # For master object access. 
+        self.object_master = object_master
+
+        ## Effort pub. Pubs for 8 thruster jts.
         self.effort_pub_rate = 0.002
-        self.effort_timer = self.create_timer(self.effort_pub_rate, self.effort_publish_message, callback_group=object.reentrant_group_1)
-
-        # Only publish if debugging enabled. FIX LATER////////////////////////////////////////////////////////
-        if self.debug:
-            # Thrust
-            self.state_thrust_pub_rate = 0.25
-            self.state_thrust_timer = self.create_timer(self.state_thrust_pub_rate, self.state_thrust_publish_message, callback_group=object.reentrant_group_1)
-
+        self.effort_timer = self.create_timer(self.effort_pub_rate, self.effort_publish_message, callback_group=object_master.reentrant_group_1)
 
         ## Publishers
-        # Only publish if debugging enabled. FIX LATER///////////////////////////////////////////////////////
-        if self.debug:
-            self.state_thrust_publisher = self.create_publisher(Float64MultiArray, '/state_thrust_vector', 10)
-
-
         self.effort_publisher = self.create_publisher(Float64MultiArray, '/forward_effort_controller/commands', 10)
-        #self.effort_publisher = self.create_publisher(DynamicJointState, 'dynamic_joint_states', 10)
-
-
-        # define cmd_vel_vector and vel_vector
-        self.cmd_vel_vector = None
-        self.vel_vector = None
-
         self.effort_time_steps = 0
 
-######
-# Timer Publishers
-######
+    # Timer Publishers
     def effort_publish_message(self):
         effort = self.gen_control_effort()
         self.effort_publisher.publish(effort)
         # self.get_logger().info(f"\nPublished the thrust. Woot! {effort}\n")
         self.effort_time_steps += 1
 
-# FIX LATER //////////////////////////////////////////////////////////////////////////////////
-    def state_thrust_publish_message(self):
-
-        # TODO: add a try statement for just in case state has not been received yet
-
-        # resultant thrusts and torques on principle axis
-        thrust = self.gen_control_force()
-
-        # combine states and thrusts for publishing
-        data = [self.object.state_vector[0],
-                self.object.state_vector[1],
-                self.object.state_vector[2],
-                self.object.state_vector[3],
-                self.object.state_vector[4],
-                self.object.state_vector[5],
-                self.object.state_vector[6],
-                self.object.state_vector[7],
-                self.object.state_vector[8],
-                self.object.state_vector[9],
-                self.object.state_vector[10],
-                self.object.state_vector[11],
-                thrust[0],
-                thrust[1],
-                thrust[2],
-                thrust[3],
-                thrust[4],
-                thrust[5],
-                ]
-
-        # Msg pub
-        dim = []
-        layout = MultiArrayLayout(dim=dim, data_offset=0)
-        state_thrust_msg = Float64MultiArray(layout=layout, data=data)
-        self.state_thrust_publisher.publish(state_thrust_msg)
-        # self.get_logger().info(f"Published the state thrust. Woot! {state_thrust_msg}")
-
-#####
-# Timer Publishers 
-#####
-
-#####
-# Subscribers
-#####
-# FIX LATER //////////////////////////////////////////////////////////////////////////////////
-    def cmd_vel_callback(self, msg):
-        # self.get_logger().info(f"Received {msg.linear.x}")
-        x_dot_cmd = msg.linear.x
-        # self.get_logger().info(f"Received {msg.linear.y}")
-        y_dot_cmd = msg.linear.y
-        # self.get_logger().info(f"Received {msg.linear.z}")
-        z_dot_cmd = msg.linear.z
-        # self.get_logger().info(f"Received {msg.angular.x}")
-        x_ang_dot_cmd = msg.angular.x
-        # self.get_logger().info(f"Received {msg.angular.y}")
-        y_ang_dot_cmd = msg.angular.y
-        # self.get_logger().info(f"Received {msg.angular.z}")
-        z_ang_dot_cmd = msg.angular.z
-
-        self.cmd_vel_vector = np.array([x_dot_cmd, y_dot_cmd, z_dot_cmd, x_ang_dot_cmd, y_ang_dot_cmd, z_ang_dot_cmd])
-
-    def vel_callback(self, msg):
-        
-        # position.x
-        # self.get_logger().info(f"Received {msg.interface_values[8].interface_names[4]}: {msg.interface_values[8].values[4]}")
-        x = msg.interface_values[8].values[0]
-        # position.y
-        y = msg.interface_values[8].values[9]
-        # position.z
-        z = msg.interface_values[8].values[1]
-        
-        # velocity.x
-        x_dot = msg.interface_values[8].values[3]
-        # velocity.y
-        y_dot = msg.interface_values[8].values[6]
-        # velocity.z
-        z_dot = msg.interface_values[8].values[5]
-        
-        # rot.r (roll)
-        roll = msg.interface_values[8].values[4]
-        # rot.p (pitch)
-        pitch = msg.interface_values[8].values[10]
-        # rot.y (yaw)
-        yaw = msg.interface_values[8].values[2]
-        
-        # w.r (roll rate)
-        roll_dot = msg.interface_values[8].values[7]
-        # w.p (pitch rate)
-        pitch_dot = msg.interface_values[8].values[8]
-        # w.y (yaw rate)
-        yaw_dot = msg.interface_values[8].values[11]
-
-        self.vel_vector = np.array([x_dot, y_dot, z_dot, roll_dot, pitch_dot, yaw_dot])
-        self.object.state_vector = np.array([x, y, z, roll, pitch, yaw, x_dot, y_dot, z_dot, roll_dot, pitch_dot, yaw_dot])
-#####
-# Subscribers
-#####
-
-#####
-# Helper Functions
-#####
-
-    def rotation_to_body_fixed(self,angles,vector):
-
-        # angles
-        roll = angles[0]
-        pitch = angles[1]
-        yaw = angles[2]
-
-        # yaw rotation
-        R_z = np.array([
-                        [cos(yaw), -sin(yaw), 0],
-                        [sin(yaw), cos(yaw), 0],
-                        [0, 0, 1]
-                        ])
-
-        # pitch rotation
-        R_y = np.array([
-                        [cos(pitch), 0, sin(pitch)],
-                        [0, 1, 0],
-                        [-sin(pitch), 0, cos(pitch)]
-                        ])
-
-        # roll rotation
-        R_x = np.array([
-                        [1, 0, 0],
-                        [0, cos(roll), -sin(roll)],
-                        [0, sin(roll), cos(roll)]
-                        ])
-
-        # total rotation matrix
-        # X = R_total@x # return relative to space-fixed coordinates
-        R_total = R_z@R_y@R_x
-
-        # transpose rotation matrix
-        # x = R_trans@X # return relative to body-fixed (rotated) coordinates
-        R_trans = np.transpose(R_total)
-
-        # transform from space-fixed (world) to body-fixed coordinates
-        vector = R_trans@vector
-
-        return vector
-
+    # Conversion from body fixed forces to thruster forces.
     def gen_control_effort(self):
 
-        # calculate required motor torques/effort
-        # F = A@Torque
-        # TYPE 1
-        # Torque = A_pinv@F
+        # calculate required motor torques/effort from body based
         A = np.array([[-0.707, -0.707,   0.707,  0.707,  0.0,    0.0,   0.0,   0.0],
                       [0.707,  -0.707,   0.707, -0.707,  0.0,    0.0,   0.0,   0.0],
                       [0.0,     0.0,     0.0,    0.0,    1.0,   -1.0,  -1.0,   1.0],
@@ -256,13 +165,11 @@ class PubSubNode(Node):
 
         A_pinv = np.linalg.pinv(A)
 
-        # F is 1x6 matrix. 
-        # F[2] only val filled. So only A_Pinv col 3 used. 
-        F = self.gen_control_force()
+        # F is 1x6 matrix body based forces: xyz rpy. 
+        F = self.object_master.input_ctrls
 
         # Matrix Multiplication. Gives 8x1 list currently. 
         Torque = A_pinv@F
-        #print(Torque)
 
         # Pad with extra zeros. The first FIVE are for the arm. The last EIGHT are for the thrusters. 
         # The way the controllers are setup, need to give thruster commands. Sim converts these back to body based.
@@ -274,411 +181,118 @@ class PubSubNode(Node):
         effort_msg = Float64MultiArray(layout=layout, data=data)
         return effort_msg
 
-    def gen_control_force(self,Fx=0.0,Fy=0.0,Fz=0.0,Tx=0.0,Ty=0.0,Tz=0.0):
-
-        # TODO: Use PI control
-        # calculate forces
-        K = np.array([[30,0,0,0,0,0],
-                      [0,30,0,0,0,0],
-                      [0,0,30,0,0,0],
-                      [0,0,0,30,0,0],
-                      [0,0,0,0,30,0],
-                      [0,0,0,0,0,30]])
-
-        # Based on:
-            # cmd_vel_vector published via generate command_vel
-            # vel_vector taken from IMU
-
-        #NOTE THE DEBUG FLAG MESSES WITH THIS. DISABLES the cmd_vel_vector. //////////////////////////////////////////////////
-        # If get vals from both:
-        if self.cmd_vel_vector is not None and self.vel_vector is not None:
-            # velocity command and velocity response received
-            error = self.cmd_vel_vector - self.vel_vector
-        # Otherwise
-        elif self.cmd_vel_vector is None or self.vel_vector is None:
-            # command or response has not been received yet
-            error = np.zeros(6)
-
-        # Forces and Torques in body-fixed coordinates
-        # Matrix multiplication
-        F = K@error
-
-        # ????? And then 0's ???????
-        F = np.zeros(6)
-        # ????? And then 0's ???????
-
-        # ramp input for testing responses//////////////////////////////////////////////////////////////////////////////////
-        if self.debug:
-            i =3 
-            if self.effort_time_steps*self.effort_pub_rate<=25:
-                F[i] = (100/25)*self.effort_time_steps*self.effort_pub_rate
-            elif self.effort_time_steps*self.effort_pub_rate<=50:
-                F[i] = -(100/25)*(self.effort_time_steps*self.effort_pub_rate-50)
-            elif self.effort_time_steps*self.effort_pub_rate>50:
-                F[i] = 0
-            else:
-                print("Something is wrong with the ramp function.")
-        else:
-            # INPUT FORCE CONTROLs. DO PID somewhere else. 
-            F = self.object.input_ctrls
-
-        return F
-
-#####
-# Helper functions
-#####
-
-from tf2_ros import TransformException
-from tf2_ros.buffer import Buffer
-from tf2_ros.transform_listener import TransformListener
-from geometry_msgs.msg import Quaternion
-
-#####
 # Waypoint P Controller Class 
-# MAKE AFTER PubSubNode
-#####
-class DoryWaypointFollower(Node):
-    def __init__(self, object):
-        super().__init__('dory_waypoint_follower')
+class WaypointFollower(Node):
+    def __init__(self, object_master,object_pd):
+        super().__init__('dory_waypoints_handle')
         # For master object access. 
-        self.object = object
+        self.object_master = object_master
+        # For PD object access
+        self.object_pd = object_pd
 
-        # Timer determines the publish rate of the waypoint controls.
+        # Timer determines the publish rate of the waypoint controls and PD requests.
         self.timer_period = 0.02
-        self.timer = self.create_timer(self.timer_period, self.timer_callback,callback_group=object.reentrant_group_1)
+        self.timer = self.create_timer(self.timer_period, self.timer_callback,callback_group=object_master.reentrant_group_1)
 
-        # To store Force and Torque Vectors
-        self._ctrl_inputs = [0.0,0.0,0.0,0.0,0.0,0.0]
-
-        # TF for BUOYANCY CONTROL
-        self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
-        # Timer for Buoyancy CTRL FOR NOW
-        #self.timer = self.create_timer(self.timer_period, self.anti_buoyancy_ctrl,callback_group=object.reentrant_group_1)
-
-        # To store current robot navigation data
-        self.robot_data = {"CurrentXYZ":[0.0,0.0,0.0],"WaypointXYZ":[[0.0,1.0,0.0]],"Time":0.0}
         # To store robot updates
-        self.robot_err = {"orient_err":{"xy":0.0,"xz":0.0},"xyz_err":[0.0,0.0,0.0],"dist_err":0.0}
+        err_deg = 15
+        self.err_angle = err_deg *3.14/180 # quat
+        self.err_dist = 0.1 # m
 
-        # PID CTRL
-        self.kp = np.zeros(6)
-        self.ki = np.zeros(6)
-        self.kd = np.zeros(6)
-        self.integral_error = np.zeros(6)
-        self.error_last = np.zeros(6)
-        self.derivative_error = np.zeros(6)
+        # Waypoints
+        # Set 1
+        # self.waypoints = [
+        #         [0.0,0.0,0.0,0.0,0.0,0.0],
+        #         [5.0,0.0, 0.0,0.0,0.0,0.0],
+        #         [5.0,1.0,0.0,0.0,0.0,0.0],
+        #         [0.0,1.0,0.0,0.0,0.0,0.0],
+        #         [0.0,2.0,0.0,0.0,0.0,0.0],
+        #         [5.0,2.0,0.0,0.0,0.0,0.0],
+        #         [5.0,3.0,0.0,0.0,0.0,0.0],
+        #         [0.0,3.0,0.0,0.0,0.0,0.0],
+        #         [0.0,4.0,0.0,0.0,0.0,0.0],
+        #         [5.0,4.0,0.0,0.0,0.0,0.0],
+        #         [5.0,5.0,0.0,0.0,0.0,0.0],
+        #         [0.0,5.0,0.0,0.0,0.0,0.0],
+        #         [0.0,6.0,0.0,0.0,0.0,0.0],
+        #         [5.0,6.0,0.0,0.0,0.0,0.0],
+        #         [5.0,7.0,0.0,0.0,0.0,0.0],
+        #         [0.0,7.0,0.0,0.0,0.0,0.0],
+        #         ]
+        # Set 2
+        # self.waypoints = [
+        #         [0.0,0.0,3.0,0.0,0.0,1.57],
+        #         [0.0,0.0,3.0,0.0,0.0,3.14],
+        #         [0.0,0.0,3.0,0.0,0.0,-3.14],
+        #         [0.0,0.0,3.0,0.0,0.0,-1.57],
+        #         [0.0,0.0,3.0,0.0,0.0,0.0]
+        #         ]
 
-        # Anti buoyancy
-        self.flat = False
-        self.orient=[0,0,0]
+        self.waypoint_index = 0
+        # Waypoint val reached for xyz rpy goals.
+        self.waypoint_reached = np.zeros(7)
+        # Need this for all check to work.
+        self.waypoint_reached[-1] = 1
 
-
-# Runs based on defined refresh rate
+    # Runs based on defined refresh rate
     def timer_callback(self):
-        # Time update for DEBUG
-        # self.robot_data["Time"]=self.get_clock().now()
-        # First retrieve the current X,Y,Z positions. 
-        # self.robot_data["CurrentXYZ"]=self.object.state_vector[0:3]
-
-        #print(self.robot_data)
-
-        # Recursively feed waypoints seeking. TO DO LOOP ////////////////////////////////////////////////
-        # self.p_controller(p_gains=[0.0,0.0,0.0,0.0,0.0,0.3],waypoint=self.robot_data["WaypointXYZ"][0])
-        
-        # Input control forces 
-        #self._ctrl_inputs[0]=0.1
-        # self._ctrl_inputs[1]=-0.1
-        # self._ctrl_inputs[2]=2.5
-        # self._ctrl_inputs[3]=0.5
-        # self._ctrl_inputs[4]=0.5
-        self._ctrl_inputs[5]=-1.5
-
-        self.object.input_ctrls=self._ctrl_inputs
-
-# CONTROLLER. Based on gains for principle forces and torques. Waypoint based on desired x,y,z.
-    def p_controller(self,p_gains=np.ones(6),waypoint=[0.0,0.0,0.0]):
-        # Call the force handle object to achieve waypoint. 
-        ## Orientation. 
-        # XY ORIENTATION
-        orient_error_xy=np.arctan2(np.subtract(self.robot_data["CurrentXYZ"][1],waypoint[1]), np.subtract(self.robot_data["CurrentXYZ"][0],waypoint[0]))
-        self.robot_err["orient_err"]["xy"] = orient_error_xy
-        
-        # # XZ ORIENTATION
-        # orient_error_xz=self.angle_wrap(np.arctan2(np.subtract(self.robot_data["CurrentXYZ"][2],waypoint[2]), np.subtract(self.robot_data["CurrentXYZ"][0],waypoint[0])))
-        # self.robot_err["orient_err"]["xz"] = orient_error_xz
-
-        ## OFFSETS 
-        for i,coord in enumerate(self.robot_err["xyz_err"]):
-            self.robot_err["xyz_err"][i]=np.subtract(waypoint[i],self.robot_data["CurrentXYZ"][i])
-
-        # Get DISTANCE 
-        self.robot_err["dist_err"]=np.sqrt(np.square(self.robot_err["xyz_err"][0])+np.square(self.robot_err["xyz_err"][1])+np.square(self.robot_err["xyz_err"][2]))
-
-        # DEBUG np.multiply(p_gains[0],self.robot_err["dist_err"])
-        # print(self.robot_err)
-        
-        ## CONTROLS
-        # Reorient in XY Plane. Go opposite of the angle diff. 
-        #self._ctrl_inputs[4]=-np.multiply(p_gains[4],self.robot_err["orient_err"]["xy"])
-        #self._ctrl_inputs[5]=-np.multiply(p_gains[5],self.robot_err["orient_err"]["xy"])
-
-        # HOVER TEST
-        # self._ctrl_inputs[5]=1.0
+        # xf is the goal waypoint 
+        goal = self.object_master.waypoint
+        # Load Goal
+        # goal = self.waypoints[self.waypoint_index]
+        # Input controls 
+        self.object_master.input_ctrls= self.object_pd.goal_handle(goal=goal) 
+        # Check if goal reached 
+        # self.goal_check(goal=goal)  
 
 
-        # LOGS
-        # self.get_logger().warning("\nOrient XY err: {0},\nDist err: {1}\n".format(orient_error_xy,self.robot_err["dist_err"]))
-        #self.get_logger().warning("\nZ err: {0}\n".format(self.robot_err["xyz_err"][2]))
-        #self.get_logger().warning("\nCtrl x: {0},\nCtrl y: {1},\nCtrl z: {2}\n".format(self._ctrl_inputs[0],self._ctrl_inputs[1],self._ctrl_inputs[2]))
-        #self.get_logger().warning("\nCtrl Roll: {0},\nCtrl Pitch: {1},\nCtrl Yaw: {2}\n".format(self._ctrl_inputs[3],self._ctrl_inputs[4],self._ctrl_inputs[5]))
+    # Goal needs to be [XYZ,RPY].
+    # BECAUSE BEING CALLED BY A TIMER, CANNOT use a WHILE LOOP.
+    def goal_check(self, goal):
+        # Current state simple: [xyz rpy]
+        # 1st check if waypt reached. 
+        if not all(self.waypoint_reached):
 
-        # Input control forces 
-        self.object.input_ctrls=self._ctrl_inputs
-        return
-    
+            # Check all vals. If not all reached at once, then reset the vals.
+            for i,val in enumerate(goal):
+                # If i in xyz and not reached
+                if i in [0,1,2]:
+                    if self.object_master.state_current_simple[i] > val - self.err_dist and self.object_master.state_current_simple[i] < val + self.err_dist:
+                        self.waypoint_reached[i]=1
+                # If i in rpy and not reached
+                elif i in [3,4,5]:
+                    if self.object_master.state_current_simple[i] > val - self.err_angle and self.object_master.state_current_simple[i] < val + self.err_angle:
+                        self.waypoint_reached[i]=1
+                else:
+                    self.waypoint_reached[0:6] = 0
 
-    def anti_buoyancy_ctrl(self):
+                    
+        # Then give response.
+        # True if reached. Reset the waypoint reached param. 
+        # Update the goal index. 
+        if all(self.waypoint_reached):
+            # Check if at end of waypoint list
+            if self.waypoint_index==(len(self.waypoints)-1):
+                self.get_logger().warning(f"\n AT END OF LIST. Current index: {self.waypoint_index}",once=True)
+                return None
 
-        # Retrieve the roll, pitch, yaw data from the imu. 
-        roll,pitch,yaw = self.object.state_vector[3],self.object.state_vector[4],self.object.state_vector[5]
-
-        # Reorient if not flat
-        if not self.flat:
-
-            ang_tol = 3.0 # deg 
-            ang = 0.0
-            # Perform torques if not within angle tolerance.
-            # Roll 
-            i = 3   
-            if (roll>ang+ang_tol) or (roll<ang-ang_tol):
-                self.kp[i] = 10.0
-                self.ki[i] = 0.0
-                self.kd[i] = 5.0
-                ctrl_roll = self.computePID(-roll,index=i)
-                self._ctrl_inputs[i]=ctrl_roll
-                self.orient[0]=0
-            else:
-                self._ctrl_inputs[i]=0.0
-                self.orient[0]=1
-            # Pitch 
-            i = 4 
-            if (pitch>ang+ang_tol) or (pitch<ang-ang_tol):
-                self.kp[i] = 45.0
-                self.ki[i] = 0.0
-                self.kd[i] = 10.0
-                ctrl_pitch = self.computePID(-pitch,index=i)
-                self._ctrl_inputs[i]=ctrl_pitch
-                self.orient[1]=0
-            else:
-                self._ctrl_inputs[i]=0.0
-                self.orient[1]=1
-            # yaw 
-            i = 4 
-            if (yaw>ang+ang_tol) or (yaw<ang-ang_tol):
-                self.kp[i] = 10.0
-                self.ki[i] = 0.0
-                self.kd[i] = 5.0
-                ctrl_yaw = self.computePID(-yaw,index=i)
-                self._ctrl_inputs[i]=ctrl_yaw
-                self.orient[2]=0
-            else:
-                self._ctrl_inputs[i]=0.0
-                self.orient[2]=1
-
-            # If all oriented, then can dive. 
-            if self.orient == [1,1,1]:
-                self.flat=True
-
-        # Otherwise Dive
+            # Reset. Update. 
+            self.waypoint_reached[0:6] = 0
+            self.waypoint_index+=1
+            self.get_logger().info(f"\n WAYPOINT REACHED. Next Goal: {self.waypoints[self.waypoint_index]}")
+            return True
         else:
-            i = 2   
-            self.kp[i] = 260.0
-            self.ki[i] = 0.0
-            self.kd[i] = 180.0
-            ctrl_z = self.computePID(-self.object.state_vector[2],index=i)
-            self._ctrl_inputs[i]=ctrl_z 
+            return False
 
-            # To check again before diving again.
-            self.flat=False 
-
-        self.object.input_ctrls=self._ctrl_inputs
-
-        self.get_logger().warning("\n Roll: {0},\n Pitch: {1},\n Yaw: {2}".format(roll,pitch,yaw))
-
-        return
-
-    # def anti_buoyancy_ctrl(self):
-    #     from_frame_rel = 'base_link'
-    #     to_frame_rel = 'alphabase_footprint'
-
-    #     try:
-    #         t = self.tf_buffer.lookup_transform(
-    #             to_frame_rel,
-    #             from_frame_rel,
-    #             rclpy.time.Time())
-    #         # Attempt to lookup TF. If cannot do so, exit. 
-    #     except TransformException as ex:
-    #         self.get_logger().info(
-    #             f'Could not transform {to_frame_rel} to {from_frame_rel}: {ex}')
-    #         return
-
-    #     # Create Inverse for ctrls.
-    #     roll,pitch,yaw = euler_from_quaternion(t.transform.rotation.x,t.transform.rotation.y,t.transform.rotation.z,t.transform.rotation.w)
+    # Outputs a list for the lawnpath to follow. 
+    # def lawnpath_gen(self,pass_cnt=3,pass_len_x = 1,pass_len_y=2,quad=0):
         
-    #     # If can lookup TF, add thrust commands to hover based on this. 
-    #     # XYZ
-    #     # p1 = 0.5
-    #     # trans_x= -p1 * t.transform.translation.x
-    #     # self._ctrl_inputs[0]=trans_x
-    #     i = 0   
-    #     self.kp[i] = 10.0
-    #     self.ki[i] = 0.0
-    #     self.kd[i] = 5.0
-    #     ctrl_x = self.computePID(-t.transform.translation.x,index=i)
-    #     self._ctrl_inputs[i]=ctrl_x  
-
-    #     # p2 = 0.5
-    #     # trans_y= -p2 * t.transform.translation.y 
-    #     # self._ctrl_inputs[1]=trans_y  
-    #     i = 1   
-    #     self.kp[i] = 10.0
-    #     self.ki[i] = 0.0
-    #     self.kd[i] = 5.0
-    #     ctrl_y = self.computePID(-t.transform.translation.y,index=i)
-    #     self._ctrl_inputs[i]=ctrl_y   
-
-    #     # p3 = 1.0
-    #     # fz_offset = -9.8
-    #     # trans_z= -p3 * t.transform.translation.z + fz_offset
-    #     # self._ctrl_inputs[2]=trans_z
-    #     i = 2   
-    #     self.kp[i] = 260.0
-    #     self.ki[i] = 0.0
-    #     self.kd[i] = 180.0
-    #     ctrl_z = self.computePID(-t.transform.translation.z,index=i)
-    #     self._ctrl_inputs[i]=ctrl_z   
-
-
-    #     # # # RPY
-    #     # p4 = 30.0
-    #     # rot_roll = t.transform.rotation.x
-    #     # self._ctrl_inputs[3]=-p4*roll
-
-    #     i = 3   
-    #     self.kp[i] = 0.4
-    #     self.ki[i] = 0.025
-    #     self.kd[i] = 0.1
-    #     err = -t.transform.rotation.x/3.14
-    #     ctrl_roll = self.computePID(err,index=i)
-    #     self._ctrl_inputs[i]=ctrl_roll   
-
-    #     # p5 = 15.0
-    #     # rot_pitch = t.transform.rotation.y
-    #     # self._ctrl_inputs[4]=-p5*pitch
-
-    #     i = 4   
-    #     self.kp[i] = 0.9
-    #     self.ki[i] = 0.0
-    #     self.kd[i] = 0.1
-    #     # Scale the values between 0 and 3.14 
-    #     err = -t.transform.rotation.y/3.14
-    #     ctrl_pitch = self.computePID(err,index=i)
-    #     self._ctrl_inputs[i]=ctrl_pitch  
-
-    #     # p6 = 15.0
-    #     # rot_yaw = t.transform.rotation.z
-    #     # self._ctrl_inputs[5]=-p6*yaw
-
-    #     # i = 5   
-    #     self.kp[i] = 2.0
-    #     self.ki[i] = 0.4
-    #     self.kd[i] = 1.0
-    #     err = t.transform.rotation.z/3.14
-    #     ctrl_yaw = self.computePID(err,index=i)
-    #     self._ctrl_inputs[i]=ctrl_yaw 
-
-    #     # Input control forces 
-    #     self.object.input_ctrls=self._ctrl_inputs
-    #     #self.object.input_ctrls=np.zeros(6)
-        
-    #     #self.get_logger().warning("\n Roll: {0},\n Pitch: {1},\n Yaw: {2}".format(roll/3.14,pitch/3.14,yaw/3.14))
-    #     #self.get_logger().warning("\n x: {0},\n y: {1},\n z: {2}".format(t.transform.translation.x,t.transform.translation.y,t.transform.translation.z))
-    #     #self.get_logger().warning("\nCtrl x: {0},\nCtrl y: {1},\nCtrl z: {2}".format(self._ctrl_inputs[0],self._ctrl_inputs[1],self._ctrl_inputs[2]))
-    #     #self.get_logger().warning("\nCtrl Roll: {0},\nCtrl Pitch: {1},\nCtrl Yaw: {2}\n".format(self._ctrl_inputs[3],self._ctrl_inputs[4],self._ctrl_inputs[5]))
-    #     return
-    
-    def computePID(self,error,index):
-        self.integral_error[index]+=error*self.timer_period
-        self.derivative_error[index]=(error-self.error_last[index])/self.timer_period
-        self.error_last[index]=error
-        output=self.kp[index]*error+self.ki[index]*self.integral_error[index]+self.kd[index]*self.derivative_error[index]
-        return output
-
-
-#####
-# Waypoint P Controller Class 
-#####
-
-##########################################################################
-# Helper Functions
-##########################################################################
-
-    def angle_wrap(self, ang):
-        '''
-        Return the angle normalized between [-pi, pi].
-
-        Works with numbers and numpy arrays.
-
-        :param ang: the input angle/s.
-        :type ang: float, numpy.ndarray
-        :returns: angle normalized between [-pi, pi].
-        :rtype: float, numpy.ndarray
-        '''
-        ang = ang % (2 * np.pi)
-        if (isinstance(ang, int) or isinstance(ang, float)) and (ang > np.pi):
-            ang -= 2 * np.pi
-        elif isinstance(ang, np.ndarray):
-            ang[ang > np.pi] -= 2 * np.pi
-        return ang
-
-import math
- 
-def euler_from_quaternion(x, y, z, w):
-        """
-        Convert a quaternion into euler angles (roll, pitch, yaw)
-        roll is rotation around x in radians (counterclockwise)
-        pitch is rotation around y in radians (counterclockwise)
-        yaw is rotation around z in radians (counterclockwise)
-        """
-        t0 = +2.0 * (w * x + y * z)
-        t1 = +1.0 - 2.0 * (x * x + y * y)
-        roll_x = math.atan2(t0, t1)
-    
-        t2 = +2.0 * (w * y - z * x)
-        t2 = +1.0 if t2 > +1.0 else t2
-        t2 = -1.0 if t2 < -1.0 else t2
-        pitch_y = math.asin(t2)
-    
-        t3 = +2.0 * (w * z + x * y)
-        t4 = +1.0 - 2.0 * (y * y + z * z)
-        yaw_z = math.atan2(t3, t4)
-    
-        return roll_x, pitch_y, yaw_z # in radians
-
-############
-# Dynamic Reconfigure 
-############
-
 from rcl_interfaces.msg import SetParametersResult
-
 class DynamicReconfig(Node):
-
-    def __init__(self, object):
-
-        super().__init__(node_name='dynamic_reconfigure')
+    def __init__(self, object_master):
+        super().__init__(node_name='dory_reconfig_handle')
         # To give selective access to all other objects info in script. 
-        self.object = object
+        self.object_master = object_master
         self.init_params()
 
     # Dynamic Reconfigure init and config. 
@@ -687,47 +301,52 @@ class DynamicReconfig(Node):
         self.declare_parameters(
             namespace='',
             parameters=[
-                ('gains.p', rclpy.Parameter.Type.STRING),
-                ('gains.i', rclpy.Parameter.Type.STRING),
-                ('gains.d', rclpy.Parameter.Type.STRING),
+                ('gains.kp', rclpy.Parameter.Type.STRING),
+                ('gains.kd', rclpy.Parameter.Type.STRING),
+                ('waypoint.pt1', rclpy.Parameter.Type.STRING)
             ],
         )
-
-        # the calls to get_parameter will raise an exception if the paramter
-        # value is not provided when the node is started.
-        param = self.get_parameter('gains.p')
+        ## PD Control
+        # Gains kp
+        param = self.get_parameter('gains.kp')
         self.get_logger().info(f'{param.name}={param.value}')
-        self.p_gain = param.value
-
-        param = self.get_parameter('gains.i')
+        response = self.string_list_handle(input_str=param.value)
+        self.pd_change_handle(input_data=response,input_type="kp")
+        # Gains kd
+        param = self.get_parameter('gains.kd')
         self.get_logger().info(f'{param.name}={param.value}')
-        self.i_gain = param.value
+        response = self.string_list_handle(input_str=param.value)
+        self.pd_change_handle(input_data=response,input_type="kd")
 
-        param = self.get_parameter('gains.d')
+        # Waypoint Control 
+        param = self.get_parameter('waypoint.pt1')
         self.get_logger().info(f'{param.name}={param.value}')
-        self.d_gain = param.value
+        response = self.string_list_handle(input_str=param.value)
+        self.waypoint_handle(input_data=response)
 
         # To be called everytime ANYTHING is changed in RQT.
         self.add_on_set_parameters_callback(self.on_params_changed)
 
-
+    # Param change in Rqt handle.
     def on_params_changed(self, params):
         param: rclpy.Parameter
         # Checking all parameter changes. 
         for param in params:
             self.get_logger().info(f'Try to set [{param.name}] = {param.value}')
-            if param.name == 'gains.p':
-                self.p_gain = param.value
-                response = self.string_list_handle(input_str=self.p_gain)
-                self.pid_change_handle(input_data=response,input_type="P")
-            elif param.name == 'gains.i':
-                self.i_gain = param.value
-                response = self.string_list_handle(input_str=self.p_gain)
-                self.pid_change_handle(input_data=response,input_type="P")
-            elif param.name == 'gains.d':
-                self.d_gain = param.value
-                response = self.string_list_handle(input_str=self.p_gain)
-                self.pid_change_handle(input_data=response,input_type="P")
+            # PD control param updates.
+            if param.name == 'gains.kp':
+                response = self.string_list_handle(input_str=param.value)
+                self.pd_change_handle(input_data=response,input_type="kp")
+            elif param.name == 'gains.kd':
+                response = self.string_list_handle(input_str=param.value)
+                self.pd_change_handle(input_data=response,input_type="kd")
+
+            # WAYPOINT Updates
+            elif param.name == 'waypoint.pt1':
+                response = self.string_list_handle(input_str=param.value)
+                self.waypoint_handle(input_data=response)
+
+            # OTHER
             else:
                 # To prevent program freezing. 
                 return SetParametersResult(successful=False, reason='Parameter not found.')
@@ -736,8 +355,8 @@ class DynamicReconfig(Node):
 
         return SetParametersResult(successful=True, reason='Parameter set')
 
-# For the dynamic reconfigure interface to work, strings must be used. Lists don't work. 
-# So need to convert the inputted strings to lists. 
+    # For the dynamic reconfigure interface to work, strings must be used. Lists don't work. 
+    # So need to convert the inputted strings to lists. 
     def string_list_handle(self, input_str):
         # Remove the front and back brackets. 
         output_list = input_str[1:-1]
@@ -760,50 +379,121 @@ class DynamicReconfig(Node):
             
         self.get_logger().debug(f'{output_list}')
         return output_list
-        
-# To publish changes to master data handler if PID inputs are correct.
-    def pid_change_handle(self,input_data,input_type):
-        if input_data == None:
-            self.get_logger().warning(f'PID controls NOT updated.')
-        else:
-            if input_type == "P":
-                self.object.P=input_data
-            elif input_type == "I":
-                self.object.I=input_data
-            elif input_type == "D":
-                self.object.D=input_data                
 
-##########################################################################
-# Helper Functions
-##########################################################################
+    # To publish changes to master data handler if PID inputs are correct.
+    def pd_change_handle(self,input_data,input_type):
+        if input_data == None:
+            self.get_logger().warning(f'PD controls NOT updated.')
+        else:
+            if input_type == "kp":
+                self.object_master.kp=input_data
+            elif input_type == "kd":
+                self.object_master.kd=input_data     
+
+    def waypoint_handle(self,input_data):
+        if input_data == None:
+            self.get_logger().warning(f'Waypoints updated.')
+        else:
+            self.object_master.waypoint=input_data     
+
+# PD Script was shared via Casadi.
+# Found on: https://github.com/edxmorgan/Diff_UV
+from casadi import Function
+# For file pathing
+from ament_index_python.packages import get_package_share_directory
+class PDControl(Node):
+    def __init__ (self,object_master):
+        super().__init__(node_name='dory_pd_handle')
+
+        # For master object variable access. 
+        self.object_master = object_master
+        # Finding the path to the casadi file for PD.
+        sub_package_share_directory = get_package_share_directory('dory_nav2')
+        pd_path = f'{sub_package_share_directory}/pid.casadi'
+        self.solver_object = Function.load(pd_path)
+
+    # Handles desired states. Returns the body fixed forces to reach said states. 
+    def goal_handle(self,goal):
+        # Does not like a combo of 
+        # Current state: [x y z w xq yq zq u v w p q r]
+        state_current = self.object_master.state_current
+        kp=self.object_master.kp
+        kd=self.object_master.kd
+        #self.get_logger().info(f'kp {kp} kd {kd} xk: {xf}')
+        response = self.solver_object(kp,kd,state_current,goal)
+        return response
+
+import math
+# Helper functions
+def euler_from_quaternion(x, y, z, w):
+        """
+        Convert a quaternion into euler angles (roll, pitch, yaw)
+        roll is rotation around x in radians (counterclockwise)
+        pitch is rotation around y in radians (counterclockwise)
+        yaw is rotation around z in radians (counterclockwise)
+        """
+        t0 = +2.0 * (w * x + y * z)
+        t1 = +1.0 - 2.0 * (x * x + y * y)
+        roll_x = math.atan2(t0, t1)
+    
+        t2 = +2.0 * (w * y - z * x)
+        t2 = +1.0 if t2 > +1.0 else t2
+        t2 = -1.0 if t2 < -1.0 else t2
+        pitch_y = math.asin(t2)
+    
+        t3 = +2.0 * (w * z + x * y)
+        t4 = +1.0 - 2.0 * (y * y + z * z)
+        yaw_z = math.atan2(t3, t4)
+    
+        return roll_x, pitch_y, yaw_z # in radians
 
 def main(args=None):
     rclpy.init(args=args)
+
+    # Change thread count based on if visualizing or not. 
+    visuals = True
     # The master object responsible for handling data sharing. 
-    dory_master = MainObjectHandle()
+    dory_master = MainObjectHandle(pub_state=visuals)
+
+    # IMU data handling.
+    dory_imu_handle = ImuHandle(object_master=dory_master)
     # Waypoint enabled vs testing controls
-    dory_pub_sub = PubSubNode(waypoints_enabled=True,object=dory_master)
+    dory_effort_handle = EffortHandle(object_master=dory_master)
+    # For PD Control 
+    dory_pd_handle = PDControl(object_master=dory_master)
     # Must be made after dory_pub_sub
-    dory_waypoints = DoryWaypointFollower(object=dory_master)
-    # For TESTING reconfigure
-    dory_reconfig = DynamicReconfig(object=dory_master)
+    dory_waypoints_handle = WaypointFollower(object_master=dory_master,object_pd=dory_pd_handle)
+    # For Dynamic reconfigure
+    dory_reconfig_handle = DynamicReconfig(object_master=dory_master)
+
 
     # Multi-threading functionality.
     # num_threads based on available threads on machine and how many things 
     # need to run at once. 
-    executor = MultiThreadedExecutor(num_threads=4)
-    executor.add_node(dory_pub_sub)
-    executor.add_node(dory_waypoints)
-    executor.add_node(dory_reconfig)
+    if visuals:
+        thread_cnt = 5
+    else:
+        thread_cnt= 4
+    executor = MultiThreadedExecutor(num_threads=thread_cnt)
+
+    # Nodes
+    executor.add_node(dory_master)
+    executor.add_node(dory_imu_handle)
+    executor.add_node(dory_effort_handle)
+    executor.add_node(dory_pd_handle)
+    executor.add_node(dory_waypoints_handle)
+    executor.add_node(dory_reconfig_handle)
 
     try:
         executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
-        dory_pub_sub.destroy_node()
-        dory_waypoints.destroy_node()
-        dory_reconfig.destroy_node()
+        dory_reconfig_handle.destroy_node()
+        dory_waypoints_handle.destroy_node()
+        dory_pd_handle.destroy_node()
+        dory_effort_handle.destroy_node()
+        dory_imu_handle.destroy_node()
 
         rclpy.shutdown()
 

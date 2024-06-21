@@ -16,31 +16,6 @@ from control_msgs.msg import DynamicJointState
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 
-
-def quaternion_from_euler(ai, aj, ak):
-    ai /= 2.0
-    aj /= 2.0
-    ak /= 2.0
-    ci = math.cos(ai)
-    si = math.sin(ai)
-    cj = math.cos(aj)
-    sj = math.sin(aj)
-    ck = math.cos(ak)
-    sk = math.sin(ak)
-    cc = ci*ck
-    cs = ci*sk
-    sc = si*ck
-    ss = si*sk
-
-    q = np.empty((4, ))
-    q[0] = cj*sc - sj*cs
-    q[1] = cj*ss + sj*cc
-    q[2] = cj*cs - sj*sc
-    q[3] = cj*cc + sj*ss
-
-    return q
-
-
 class FramePublisher(Node):
 
     def __init__(self,reentrant_group):
@@ -65,38 +40,34 @@ class FramePublisher(Node):
     def handle_odom(self, msg):
         t = TransformStamped()
 
-        # Read message content and assign it to
-        # corresponding tf variables
-        # Copy for access across nodes
+        # For sharing headers for time sync
         self.header_stamp = msg.header.stamp
         # For time sync
         t.header.stamp = msg.header.stamp
         t.header.frame_id = 'world'
         t.child_frame_id = 'base_link'
 
-        # Turtle only exists in 2D, thus we get x and y translation
-        # coordinates from the message and set the z coordinate to 0
+        # Invert the y and z axis vals. For PD controller handling.
         t.transform.translation.x= msg.interface_values[8].values[9]
-        t.transform.translation.y = msg.interface_values[8].values[2]
-        # t.transform.translation.z= msg.interface_values[8].values[0]
+        t.transform.translation.y = -msg.interface_values[8].values[2]
         t.transform.translation.z= -msg.interface_values[8].values[0]
 
-
-        # For the same reason, turtle can only rotate around one axis
-        # and this why we set rotation in x and y to 0 and obtain
-        # rotation in z axis from the message
-        q = quaternion_from_euler(msg.interface_values[8].values[10], msg.interface_values[8].values[6], msg.interface_values[8].values[2])
-        t.transform.rotation.x = q[0]
-        t.transform.rotation.y = q[1]
-        t.transform.rotation.z = q[2]
-        t.transform.rotation.w = q[3]
+        # Invert the pitch and yaw vals. For PD Controller handling.
+        roll,pitch,yaw = euler_from_quaternion(msg.interface_values[8].values[10],msg.interface_values[8].values[6],msg.interface_values[8].values[3],msg.interface_values[8].values[1])
+        pitch = -pitch
+        yaw = -yaw
+        quat = quaternion_from_euler(roll,pitch,yaw)
+        
+        # Set new quaternion.
+        t.transform.rotation.x = quat[0]
+        t.transform.rotation.y = quat[1]
+        t.transform.rotation.z = quat[2]
+        t.transform.rotation.w = quat[3]
 
         # Send the transformation
         self.tf_broadcaster.sendTransform(t)
 
-#####
 # Visualization Class
-#####
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
 
@@ -235,9 +206,49 @@ class WaypointVisuals(Node):
 
         return
 
-#####
-# Visualization Class
-#####
+# Helper functions
+def euler_from_quaternion(x, y, z, w):
+        """
+        Convert a quaternion into euler angles (roll, pitch, yaw)
+        roll is rotation around x in radians (counterclockwise)
+        pitch is rotation around y in radians (counterclockwise)
+        yaw is rotation around z in radians (counterclockwise)
+        """
+        t0 = +2.0 * (w * x + y * z)
+        t1 = +1.0 - 2.0 * (x * x + y * y)
+        roll_x = math.atan2(t0, t1)
+    
+        t2 = +2.0 * (w * y - z * x)
+        t2 = +1.0 if t2 > +1.0 else t2
+        t2 = -1.0 if t2 < -1.0 else t2
+        pitch_y = math.asin(t2)
+    
+        t3 = +2.0 * (w * z + x * y)
+        t4 = +1.0 - 2.0 * (y * y + z * z)
+        yaw_z = math.atan2(t3, t4)
+    
+        return roll_x, pitch_y, yaw_z # in radians
+
+def quaternion_from_euler(roll, pitch, yaw):
+  """
+  Convert an Euler angle to a quaternion.
+   
+  Input
+    :param roll: The roll (rotation around x-axis) angle in radians.
+    :param pitch: The pitch (rotation around y-axis) angle in radians.
+    :param yaw: The yaw (rotation around z-axis) angle in radians.
+ 
+  Output
+    :return qx, qy, qz, qw: The orientation in quaternion [x,y,z,w] format
+  """
+  qx = np.sin(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) - np.cos(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
+  qy = np.cos(roll/2) * np.sin(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) * np.cos(pitch/2) * np.sin(yaw/2)
+  qz = np.cos(roll/2) * np.cos(pitch/2) * np.sin(yaw/2) - np.sin(roll/2) * np.sin(pitch/2) * np.cos(yaw/2)
+  qw = np.cos(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
+ 
+  return [qx, qy, qz, qw]
+
+
 def main(args=None):
     rclpy.init(args=args)
     # Reentrant Groups for Multithreading
