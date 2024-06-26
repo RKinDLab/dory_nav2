@@ -29,7 +29,7 @@ class MainObjectHandle(Node):
         # TO DO: CHANGE THE SIM BASED ON IF INPUT WAYPTS OR SAVED PATH FROM CONFIG OR 
         # Path generation function.
         # Configuration: Path or Waypoint enabled. 
-        self.configuration = np.zeros(2)
+        self.configuration = {"Waypoint":False}
 
         # Publish rate handle
         self.rates={"MainObjectHandle":{"publish_state_message":0.2},
@@ -60,8 +60,6 @@ class MainObjectHandle(Node):
         # For waypoint on access. 
         self.waypoint_on = [0.0]*6
         self.waypoint_on = list(map(float,self.waypoint_on))
-        # Waypoints TO DO COMBINE WITH WAYPOINT_ON
-        self.waypoint = np.zeros(6)
 
         if self.pub_state:
             ## Pubs for Roll, Pitch, Yaw.
@@ -331,22 +329,18 @@ class WaypointFollower(Node):
 
     # Runs based on defined refresh rate
     def timer_callback(self):
-        # xf is the goal waypoint. Based on set from rqt. 
-        # goal = self.object_master.waypoint
-        # Load Goal
-        self.object_master.waypoint_on = self.waypoints[self.waypoint_index]
+        # waypoint_on is the goal waypoint. Based on set from rqt or loaded from path. 
+        # FOLLOWING PATH. IF a waypoint is inserted by RQT, will seek it then return to the path. 
+        # Update counter if NOT DONE WITH PATH. 
+        if not self.object_master.configuration["Waypoint"]:
+            # Check if goal reached 
+            self.goal_check(goal=self.object_master.waypoint_on)  
+            # Update waypoint seeking. Will NOT update if at end of list. 
+            self.object_master.waypoint_on = self.waypoints[self.waypoint_index]
 
-        # Check if goal reached 
-        end_list = self.goal_check(goal=self.object_master.waypoint_on)  
-
-        # If at end of path, end inputs. 
-        if end_list == "end":
-            self.object_master.input_ctrls= np.zeros(6)
-        else:
-            # Input controls 
-            self.object_master.input_ctrls= self.object_pd.goal_handle(goal=self.object_master.waypoint_on) 
-
-
+        # Input controls 
+        # self.get_logger().info(f'{self.object_master.waypoint_on}')
+        self.object_master.input_ctrls= self.object_pd.goal_handle(goal=self.object_master.waypoint_on) 
 
     # Goal needs to be [XYZ,RPY].
     # BECAUSE BEING CALLED BY A TIMER, CANNOT use a WHILE LOOP.
@@ -373,14 +367,15 @@ class WaypointFollower(Node):
         # True if reached. Reset the waypoint reached param. 
         # Update the goal index. 
         if all(self.waypoint_reached):
-            # Check if at end of waypoint list
+            # Check if at end of waypoint list. Will NOT UPDATE if AT END OF LIST. 
             if self.waypoint_index==(len(self.waypoints)-1):
                 self.get_logger().warning(f"\n AT END OF LIST. Current index: {self.waypoint_index}",once=True)
-                return "end"
+                return
+            else:
+                self.waypoint_index+=1
 
             # Reset. Update. 
             self.waypoint_reached[0:6] = 0
-            self.waypoint_index+=1
             self.get_logger().info(f"\n WAYPOINT REACHED. Next Goal: {self.waypoints[self.waypoint_index]}")
             return
         else:
@@ -402,7 +397,7 @@ class DynamicReconfig(Node):
     def init_params(self):
         param_type_str = rclpy.Parameter.Type.STRING
         param_type_bool = rclpy.Parameter.Type.BOOL
-        params = ["gains.kp",'gains.kd','waypoint.seeking','configuration.following_waypoint','configuration.following_path']
+        params = ["gains.kp",'gains.kd','waypoint.seeking','configuration.following_waypoint']
 
         # Must be declared for params to be accessible. 
         self.declare_parameters(
@@ -412,7 +407,6 @@ class DynamicReconfig(Node):
                 (params[1], param_type_str),
                 (params[2], param_type_str),
                 (params[3], param_type_bool),
-                (params[4], param_type_bool),
             ],
         )
         ## Init params.
@@ -430,8 +424,8 @@ class DynamicReconfig(Node):
                 else:
                     self.waypoint_handle(input_data=response)
             # Follow set waypoint or path (set of)
-            elif i in [3,4]:
-                self.object_master.configuration[i-3] = param.value
+            elif i == 3:
+                self.object_master.configuration["Waypoint"] = param.value
 
         # To be called everytime ANYTHING is changed in RQT.
         self.add_on_set_parameters_callback(self.on_params_changed)
@@ -454,10 +448,11 @@ class DynamicReconfig(Node):
 
             # Configuration Updates
             elif param.name == 'configuration.following_waypoint':
-                self.object_master.configuration[0] = param.value
-            # Configuration Updates
-            elif param.name == 'configuration.following_path':
-                self.object_master.configuration[1] = param.value
+                self.object_master.configuration["Waypoint"] = param.value
+                # Update the waypoint seeking to whatever is in RQT. 
+                if param.value:
+                    response = self.string_list_handle(self.get_parameter("waypoint.seeking").value)
+                    self.waypoint_handle(input_data=response)
 
             # OTHER
             else:
@@ -504,10 +499,11 @@ class DynamicReconfig(Node):
                 self.object_master.kd=input_data     
 
     def waypoint_handle(self,input_data):
+        # Do not update waypoints if input data is wrong.
         if input_data == None:
             self.get_logger().warning(f'Waypoints updated.')
         else:
-            self.object_master.waypoint=input_data     
+            self.object_master.waypoint_on=input_data     
 
 # PD Script was shared via Casadi.
 # Found on: https://github.com/edxmorgan/Diff_UV
