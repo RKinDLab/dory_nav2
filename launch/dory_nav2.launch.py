@@ -37,13 +37,13 @@ def generate_launch_description():
     # Rosbag flag argument
     record_bag_arg = DeclareLaunchArgument(
             'record_bag',
-            default_value='false',
+            default_value='true',
             description='Flag to enable or disable rosbag recording'
         )
     # path to rosbag directory
     workspace_directory = os.getcwd()
     timestamp = datetime.now().strftime('%Y_%m_%d-%H_%M_%S')
-    relative_path = f'bags/dory_response_{timestamp}'
+    relative_path = f'src/dory_nav2/bags/dory_response_{timestamp}'
     bags_filepath = os.path.join(workspace_directory, relative_path)
 
     # record_rosbag if flag True
@@ -53,7 +53,7 @@ def generate_launch_description():
                                       cmd=['ros2', 'bag', 'record',
                                            '-o', bags_filepath,
                                            '--storage', 'sqlite3',
-                                           '/state_thrust_vector'],
+                                           '/dory/visuals/state'],
                                       output='screen'
                                       )
     #####################
@@ -82,10 +82,9 @@ def generate_launch_description():
                            )   
 
     return LaunchDescription([
-        #record_bag_arg,
+        # record_bag_arg,
         sub_launch,
         gen_cmd_vel_node,
-        #gen_thrust_node,
-        #state_thrust_bag
-        odom_pub
+        # state_thrust_bag,
+        # odom_pub
     ])

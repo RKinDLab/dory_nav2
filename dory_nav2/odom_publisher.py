@@ -9,7 +9,7 @@ from rclpy.node import Node
 
 from tf2_ros import TransformBroadcaster
 
-# The msg type of the incoming data. 
+# The msg type of the incoming data. .
 from control_msgs.msg import DynamicJointState
 
 # For multi-threading
@@ -49,20 +49,28 @@ class FramePublisher(Node):
 
         # Invert the y and z axis vals. For PD controller handling.
         t.transform.translation.x= msg.interface_values[8].values[9]
-        t.transform.translation.y = -msg.interface_values[8].values[2]
+        t.transform.translation.y = msg.interface_values[8].values[2]
         t.transform.translation.z= -msg.interface_values[8].values[0]
+        # t.transform.translation.y = -msg.interface_values[8].values[2]
+        # t.transform.translation.z= -msg.interface_values[8].values[0]
 
-        # Invert the pitch and yaw vals. For PD Controller handling.
-        roll,pitch,yaw = euler_from_quaternion(msg.interface_values[8].values[10],msg.interface_values[8].values[6],msg.interface_values[8].values[3],msg.interface_values[8].values[1])
-        pitch = -pitch
-        yaw = -yaw
-        quat = quaternion_from_euler(roll,pitch,yaw)
+        # # Invert the pitch and yaw vals. For PD Controller handling.
+        # roll,pitch,yaw = euler_from_quaternion(msg.interface_values[8].values[10],msg.interface_values[8].values[6],msg.interface_values[8].values[3],msg.interface_values[8].values[1])
+        # pitch = -pitch
+        # yaw = -yaw
+        # quat = quaternion_from_euler(roll,pitch,yaw)
         
-        # Set new quaternion.
-        t.transform.rotation.x = quat[0]
-        t.transform.rotation.y = quat[1]
-        t.transform.rotation.z = quat[2]
-        t.transform.rotation.w = quat[3]
+        # # Set new quaternion.
+        # t.transform.rotation.x = quat[0]
+        # t.transform.rotation.y = quat[1]
+        # t.transform.rotation.z = quat[2]
+        # t.transform.rotation.w = quat[3]
+
+        # # Set new quaternion.
+        t.transform.rotation.x = msg.interface_values[8].values[10]
+        t.transform.rotation.y = msg.interface_values[8].values[6]
+        t.transform.rotation.z = msg.interface_values[8].values[3]
+        t.transform.rotation.w = msg.interface_values[8].values[1]
 
         # Send the transformation
         self.tf_broadcaster.sendTransform(t)

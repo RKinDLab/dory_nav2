@@ -14,7 +14,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name), glob('launch/*.launch.py')),
         (os.path.join('share', package_name), glob('config/*.yaml')),
-        (os.path.join('share', package_name), glob('config/*.casadi'))
+        (os.path.join('share', package_name), glob('casadi/*.casadi'))
     ],
     install_requires=['setuptools'],
     zip_safe=True,

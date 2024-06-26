@@ -4,4 +4,7 @@ dory/dory_reconfig_handle:
       kp: "[1.0,1.0,1.0,1.0,1.0,1.0]"
       kd: "[2.0,2.0,2.0,2.0,2.0,2.0]"
     waypoint: 
-      pt1: "[1.0,1.0,3.0,0.0,0.0,0.0]"
+      seeking: "[1.0,1.0,3.0,0.0,0.0,0.0]"
+    configuration:
+      following_waypoint: false
+      following_path: true
