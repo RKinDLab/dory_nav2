@@ -168,7 +168,7 @@ class ImuHandle(Node):
             # For smoothing subscription rates
             if time_diff > 0.1:
                 self.object_master.rates["ImuHandle"]["dynamic_joint_states_callback"] = time_diff
-                self.get_logger().info(f'{self.object_master.rates}')
+                # self.get_logger().info(f'{self.object_master.rates}')
             self.prev_time = current_time
 
 # Effort publish to thrusters and body force-> thruster mapping.
@@ -399,46 +399,39 @@ class DynamicReconfig(Node):
         self.init_params()
 
     # Dynamic Reconfigure init and config. 
-    # TO DO COMPRESS CODE. 
     def init_params(self):
+        param_type_str = rclpy.Parameter.Type.STRING
+        param_type_bool = rclpy.Parameter.Type.BOOL
+        params = ["gains.kp",'gains.kd','waypoint.seeking','configuration.following_waypoint','configuration.following_path']
+
         # Must be declared for params to be accessible. 
         self.declare_parameters(
             namespace='',
             parameters=[
-                ('gains.kp', rclpy.Parameter.Type.STRING),
-                ('gains.kd', rclpy.Parameter.Type.STRING),
-                ('waypoint.seeking', rclpy.Parameter.Type.STRING),
-                ('configuration.following_waypoint', rclpy.Parameter.Type.BOOL),
-                ('configuration.following_path', rclpy.Parameter.Type.BOOL),
+                (params[0], param_type_str),
+                (params[1], param_type_str),
+                (params[2], param_type_str),
+                (params[3], param_type_bool),
+                (params[4], param_type_bool),
             ],
         )
-        ## PD Control
-        # Gains kp
-        param = self.get_parameter('gains.kp')
-        self.get_logger().info(f'{param.name}={param.value}')
-        response = self.string_list_handle(input_str=param.value)
-        self.pd_change_handle(input_data=response,input_type="kp")
-        # Gains kd
-        param = self.get_parameter('gains.kd')
-        self.get_logger().info(f'{param.name}={param.value}')
-        response = self.string_list_handle(input_str=param.value)
-        self.pd_change_handle(input_data=response,input_type="kd")
-
-        # Waypoint Control 
-        param = self.get_parameter('waypoint.seeking')
-        self.get_logger().info(f'{param.name}={param.value}')
-        response = self.string_list_handle(input_str=param.value)
-        self.waypoint_handle(input_data=response)
-
-        # Follow set waypoint or path (set of)
-        # Waypoint 
-        param = self.get_parameter('configuration.following_waypoint')
-        self.get_logger().info(f'{param.name}={param.value}')
-        self.object_master.configuration[0] = param.value
-        # Path 
-        param = self.get_parameter('configuration.following_path')
-        self.get_logger().info(f'{param.name}={param.value}')
-        self.object_master.configuration[1] = param.value
+        ## Init params.
+        for i,val in enumerate(params):
+            param = self.get_parameter(val)
+            self.get_logger().info(f'{param.name}={param.value}')
+            # PD Control, Waypoint Seeking.
+            if i in [0,1,2]:
+                # String Handle
+                response = self.string_list_handle(input_str=param.value)
+                # Gains kp, kd
+                if i in [0,1]:
+                    self.pd_change_handle(input_data=response,input_type=val[6:])
+                # Waypoint Handle
+                else:
+                    self.waypoint_handle(input_data=response)
+            # Follow set waypoint or path (set of)
+            elif i in [3,4]:
+                self.object_master.configuration[i-3] = param.value
 
         # To be called everytime ANYTHING is changed in RQT.
         self.add_on_set_parameters_callback(self.on_params_changed)
@@ -450,12 +443,9 @@ class DynamicReconfig(Node):
         for param in params:
             self.get_logger().info(f'Try to set [{param.name}] = {param.value}')
             # PD control param updates.
-            if param.name == 'gains.kp':
+            if param.name == 'gains.kp' or param.name == 'gains.kd':
                 response = self.string_list_handle(input_str=param.value)
-                self.pd_change_handle(input_data=response,input_type="kp")
-            elif param.name == 'gains.kd':
-                response = self.string_list_handle(input_str=param.value)
-                self.pd_change_handle(input_data=response,input_type="kd")
+                self.pd_change_handle(input_data=response,input_type=param.name[6:])
 
             # WAYPOINT Updates
             elif param.name == 'waypoint.seeking':
@@ -467,7 +457,7 @@ class DynamicReconfig(Node):
                 self.object_master.configuration[0] = param.value
             # Configuration Updates
             elif param.name == 'configuration.following_path':
-                self.object_master.configuration[0] = param.value
+                self.object_master.configuration[1] = param.value
 
             # OTHER
             else:
